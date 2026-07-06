@@ -33,7 +33,7 @@ type AssetRecord = {
 
 type LottieModule = typeof import('lottie-web')
 
-const FFMPEG_CORE_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.15/dist/esm'
+const FFMPEG_CORE_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm'
 
 function formatBytes(size: number) {
   if (size < 1024) return `${size} B`
