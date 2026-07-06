@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent 
 import type { AnimationItem } from 'lottie-web'
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { toBlobURL } from '@ffmpeg/util'
+import { fal } from '@fal-ai/client'
 import './App.css'
 
 type LottieData = Record<string, unknown> & {
@@ -15,6 +16,7 @@ type LottieData = Record<string, unknown> & {
 type AssetStatus = 'ready' | 'error'
 type AssetTab = 'all' | 'ready' | 'error'
 type SortMode = 'featured' | 'newest' | 'oldest' | 'largest' | 'smallest' | 'name'
+type AiProvider = 'fal' | 'wiro'
 
 type AssetRecord = {
   id: string
@@ -32,6 +34,16 @@ type AssetRecord = {
 }
 
 type LottieModule = typeof import('lottie-web')
+
+type AiHistoryItem = {
+  id: string
+  provider: AiProvider
+  prompt: string
+  assetName?: string
+  status: 'success' | 'error'
+  message: string
+  createdAt: string
+}
 
 const FFMPEG_CORE_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm'
 
@@ -51,6 +63,13 @@ function formatDuration(seconds: number) {
   if (!Number.isFinite(seconds) || seconds <= 0) return '0s'
   if (seconds < 10) return `${seconds.toFixed(1)}s`
   return `${Math.round(seconds)}s`
+}
+
+function formatTimestamp(seconds: number) {
+  const safe = Math.max(0, Math.floor(seconds))
+  const minutes = String(Math.floor(safe / 60)).padStart(2, '0')
+  const secs = String(safe % 60).padStart(2, '0')
+  return `${minutes}:${secs}`
 }
 
 function getAssetStats(data: LottieData) {
@@ -90,6 +109,71 @@ function fileInitials(name: string) {
 
 function safeFileName(name: string) {
   return name.replace(/\.[^.]+$/, '')
+}
+
+function makeLottieFile(name: string, data: LottieData) {
+  return new File([JSON.stringify(data, null, 2)], name, { type: 'application/json' })
+}
+
+function createAssetRecord(file: File, data: LottieData): AssetRecord {
+  const stats = getAssetStats(data)
+  return {
+    id: `${file.name}-${file.size}-${crypto.randomUUID()}`,
+    file,
+    name: file.name,
+    size: file.size,
+    status: 'ready',
+    data,
+    width: stats.width,
+    height: stats.height,
+    frameRate: stats.frameRate,
+    frames: stats.frames,
+    duration: stats.duration,
+  }
+}
+
+function extractJsonFromText(text: string) {
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  const raw = (fenceMatch?.[1] ?? text).trim()
+  return JSON.parse(raw)
+}
+
+function isLottieData(value: unknown): value is LottieData {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      ('layers' in value || 'assets' in value) &&
+      ('fr' in value || 'op' in value || 'w' in value || 'h' in value),
+  )
+}
+
+function findLottieData(value: unknown): LottieData | null {
+  if (isLottieData(value)) return value
+
+  if (typeof value === 'string') {
+    try {
+      return findLottieData(extractJsonFromText(value))
+    } catch {
+      return null
+    }
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findLottieData(item)
+      if (found) return found
+    }
+    return null
+  }
+
+  if (value && typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      const found = findLottieData(item)
+      if (found) return found
+    }
+  }
+
+  return null
 }
 
 function nextFrame() {
@@ -310,6 +394,15 @@ function App() {
   const [exportProgress, setExportProgress] = useState(0)
   const [exportMessage, setExportMessage] = useState<string>('')
   const [exportUrl, setExportUrl] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [falKey, setFalKey] = useState(() => sessionStorage.getItem('bulk-lottie-viewer:fal-key') ?? '')
+  const [wiroKey, setWiroKey] = useState(() => sessionStorage.getItem('bulk-lottie-viewer:wiro-key') ?? '')
+  const [wiroModel, setWiroModel] = useState(() => sessionStorage.getItem('bulk-lottie-viewer:wiro-model') ?? 'openai/gpt-5.5')
+  const [aiProvider, setAiProvider] = useState<AiProvider>('fal')
+  const [aiPrompt, setAiPrompt] = useState('Make this animation cleaner, smoother, and more premium while keeping the same idea.')
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiMessage, setAiMessage] = useState('AI edits create a new Lottie file in this browser session.')
+  const [aiHistory, setAiHistory] = useState<AiHistoryItem[]>([])
   const inputRef = useRef<HTMLInputElement | null>(null)
   const ffmpegRef = useRef(new FFmpeg())
   const ffmpegLoadedRef = useRef(false)
@@ -317,6 +410,30 @@ function App() {
 
   const readyCount = useMemo(() => assets.filter((asset) => asset.status === 'ready').length, [assets])
   const errorCount = useMemo(() => assets.filter((asset) => asset.status === 'error').length, [assets])
+
+  useEffect(() => {
+    if (falKey) {
+      sessionStorage.setItem('bulk-lottie-viewer:fal-key', falKey)
+    } else {
+      sessionStorage.removeItem('bulk-lottie-viewer:fal-key')
+    }
+  }, [falKey])
+
+  useEffect(() => {
+    if (wiroKey) {
+      sessionStorage.setItem('bulk-lottie-viewer:wiro-key', wiroKey)
+    } else {
+      sessionStorage.removeItem('bulk-lottie-viewer:wiro-key')
+    }
+  }, [wiroKey])
+
+  useEffect(() => {
+    if (wiroModel) {
+      sessionStorage.setItem('bulk-lottie-viewer:wiro-model', wiroModel)
+    } else {
+      sessionStorage.removeItem('bulk-lottie-viewer:wiro-model')
+    }
+  }, [wiroModel])
 
   useEffect(() => {
     if (!activeId && assets.length) {
@@ -370,20 +487,7 @@ function App() {
         jsonFiles.map(async (file) => {
           const raw = await file.text()
           const data = JSON.parse(raw) as LottieData
-          const stats = getAssetStats(data)
-          return {
-            id: `${file.name}-${file.size}-${crypto.randomUUID()}`,
-            file,
-            name: file.name,
-            size: file.size,
-            status: 'ready' as const,
-            data,
-            width: stats.width,
-            height: stats.height,
-            frameRate: stats.frameRate,
-            frames: stats.frames,
-            duration: stats.duration,
-          } satisfies AssetRecord
+          return createAssetRecord(file, data)
         }),
       )
 
@@ -453,6 +557,7 @@ function App() {
   const activeAsset = assets.find((asset) => asset.id === activeId) ?? filteredAssets[0] ?? null
   const totalCount = assets.length
   const detailsAsset = activeAsset ?? filteredAssets[0] ?? null
+  const totalSize = assets.reduce((sum, asset) => sum + asset.size, 0)
 
   useEffect(() => {
     if (!detailOpen) return
@@ -598,6 +703,147 @@ function App() {
     }
   }
 
+  function addAiHistory(item: Omit<AiHistoryItem, 'id' | 'createdAt'>) {
+    setAiHistory((current) => [
+      {
+        ...item,
+        id: crypto.randomUUID(),
+        createdAt: new Date().toLocaleTimeString(),
+      },
+      ...current,
+    ].slice(0, 12))
+  }
+
+  function addGeneratedAsset(name: string, data: LottieData, provider: AiProvider, prompt: string) {
+    const file = makeLottieFile(name, data)
+    const asset = createAssetRecord(file, data)
+
+    setAssets((current) => [asset, ...current])
+    setActiveId(asset.id)
+    setStatus(`${name} AI ile eklendi.`)
+    setAiMessage(`${name} ready.`)
+    addAiHistory({
+      provider,
+      prompt,
+      assetName: name,
+      status: 'success',
+      message: 'New Lottie added to the batch.',
+    })
+  }
+
+  async function runFalOmnilottie(prompt: string) {
+    if (!falKey.trim()) {
+      throw new Error('Fal API key is missing.')
+    }
+
+    fal.config({ credentials: falKey.trim() })
+    const result = await fal.subscribe('fal-ai/omnilottie', {
+      input: {
+        prompt,
+        max_tokens: 4096,
+      },
+      logs: true,
+      onQueueUpdate: (update) => {
+        if (update.status === 'IN_PROGRESS') {
+          const latestLog = update.logs?.at(-1)?.message
+          setAiMessage(latestLog ?? 'Fal is generating Lottie JSON...')
+        }
+      },
+    })
+
+    const data = result.data as { lottie_file?: { url?: string }; lottie?: unknown; output?: unknown }
+    if (data.lottie_file?.url) {
+      const response = await fetch(data.lottie_file.url)
+      if (!response.ok) throw new Error(`Fal result could not be fetched: ${response.status}`)
+      const generated = await response.json()
+      const lottie = findLottieData(generated)
+      if (lottie) return lottie
+    }
+
+    const direct = findLottieData(data)
+    if (direct) return direct
+
+    throw new Error('Fal response did not include valid Lottie JSON.')
+  }
+
+  async function runWiroEdit(asset: AssetRecord, prompt: string) {
+    if (!wiroKey.trim()) {
+      throw new Error('Wiro API key is missing.')
+    }
+
+    if (!wiroModel.trim()) {
+      throw new Error('Wiro model slug is missing.')
+    }
+
+    if (asset.status !== 'ready' || !asset.data) {
+      throw new Error('Select a valid Lottie before using Wiro edit.')
+    }
+
+    const request = {
+      prompt: [
+        'You are editing a Lottie animation JSON.',
+        'Return only valid Lottie JSON. No markdown, no explanations.',
+        `User edit request: ${prompt}`,
+        `Current Lottie JSON: ${JSON.stringify(asset.data)}`,
+      ].join('\n\n'),
+    }
+
+    const modelPath = wiroModel.trim().split('/').map(encodeURIComponent).join('/')
+    const response = await fetch(`https://api.wiro.ai/v1/Run/${modelPath}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${wiroKey.trim()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`Wiro request failed: ${response.status} ${errorText.slice(0, 180)}`)
+    }
+
+    const payload = await response.json()
+    const lottie = findLottieData(payload)
+    if (!lottie) {
+      throw new Error('Wiro response did not include valid Lottie JSON. Try a text/JSON capable model slug.')
+    }
+
+    return lottie
+  }
+
+  async function runAiEdit(asset: AssetRecord | null) {
+    const prompt = aiPrompt.trim()
+    if (!prompt) {
+      setAiMessage('Write an edit prompt first.')
+      return
+    }
+
+    setAiBusy(true)
+    setAiMessage(aiProvider === 'fal' ? 'Fal Omnilottie is generating...' : 'Wiro is editing JSON...')
+
+    try {
+      const sourceName = asset?.name ? safeFileName(asset.name) : 'prompt'
+      const data =
+        aiProvider === 'fal'
+          ? await runFalOmnilottie(asset?.data ? `${prompt}\n\nReference the current Lottie concept: ${sourceName}` : prompt)
+          : await runWiroEdit(asset as AssetRecord, prompt)
+      const name = `${sourceName}-${aiProvider}-edit-${Date.now()}.json`
+      addGeneratedAsset(name, data, aiProvider, prompt)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setAiMessage(message)
+      addAiHistory({
+        provider: aiProvider,
+        prompt,
+        status: 'error',
+        message,
+      })
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
   return (
     <div
       className={`app-shell ${dragging ? 'is-dragging' : ''}`}
@@ -616,111 +862,130 @@ function App() {
       }}
       onDrop={handleDrop}
     >
-      <header className="topbar">
-        <div className="brand">
-          <p className="eyebrow">Bulk Lottie Viewer</p>
-          <h1>Gallery view for batch checks</h1>
-          <p className="lede">Load a pile of Lottie JSON files, scan them as cards, and keep the whole batch visible.</p>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".json,application/json"
+        multiple
+        hidden
+        onChange={handleInputChange}
+      />
+
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <h1>Bulk Lottie Viewer</h1>
         </div>
 
-        <div className="toolbar">
-          <input
-            ref={inputRef}
-            type="file"
-            accept=".json,application/json"
-            multiple
-            hidden
-            onChange={handleInputChange}
-          />
-          <button type="button" className="button button-primary" onClick={() => inputRef.current?.click()}>
-            Add files
+        <div className="sidebar-tools">
+          <button type="button" className="primary-action" onClick={() => inputRef.current?.click()}>
+            <span>+</span>
+            Import Folder
           </button>
-          <button type="button" className="button" onClick={handleClear} disabled={!assets.length}>
-            Clear
-          </button>
-        </div>
-      </header>
 
-      <section className="upload-strip" aria-label="Upload area">
-        <button
-          type="button"
-          className="upload-hero"
-          onClick={() => inputRef.current?.click()}
-          onDragEnter={(event) => {
-            event.preventDefault()
-            setDragging(true)
-          }}
-          onDragOver={(event) => {
-            event.preventDefault()
-            setDragging(true)
-          }}
-        >
-          <span className="upload-plus">+</span>
-          <span className="upload-text">{loading ? 'Reading files' : dragging ? 'Drop to add' : 'Click or drop JSON files'}</span>
-          <span className="upload-hint">Supports 50 files at once. Nested folders work too.</span>
-        </button>
-
-        <div className="upload-stats">
-          <div>
-            <span>Total</span>
-            <strong>{totalCount}</strong>
-          </div>
-          <div>
-            <span>Ready</span>
-            <strong>{readyCount}</strong>
-          </div>
-          <div>
-            <span>Errors</span>
-            <strong>{errorCount}</strong>
-          </div>
-          <div>
-            <span>Status</span>
-            <strong>{status}</strong>
-          </div>
-        </div>
-      </section>
-
-      <section className="gallery-toolbar">
-        <div className="tabs" role="tablist" aria-label="Asset filters">
-          <button type="button" className={`tab ${tab === 'all' ? 'is-active' : ''}`} onClick={() => setTab('all')}>
-            All Assets <span>{assets.length}</span>
-          </button>
-          <button type="button" className={`tab ${tab === 'ready' ? 'is-active' : ''}`} onClick={() => setTab('ready')}>
-            Lottie Animations <span>{readyCount}</span>
-          </button>
-          <button type="button" className={`tab ${tab === 'error' ? 'is-active' : ''}`} onClick={() => setTab('error')}>
-            Errors <span>{errorCount}</span>
-          </button>
-        </div>
-
-        <div className="filters">
-          <label className="select-field">
-            <span>Sort</span>
-            <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
-              <option value="featured">Featured</option>
-              <option value="newest">Newest</option>
-              <option value="oldest">Oldest</option>
-              <option value="largest">Largest</option>
-              <option value="smallest">Smallest</option>
-              <option value="name">Name</option>
-            </select>
-          </label>
-
-          <label className="select-field">
-            <span>Search</span>
+          <label className="search-field">
             <input
               type="search"
               value={search}
-              placeholder="Filter by name"
+              placeholder="Search files..."
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
         </div>
-      </section>
 
-      <main className="gallery-shell">
-        {filteredAssets.length ? (
+        <nav className="sidebar-nav" aria-label="Asset filters">
+          <button type="button" className={`nav-item ${tab === 'all' ? 'is-active' : ''}`} onClick={() => setTab('all')}>
+            <span>All Files</span>
+            <strong>{assets.length}</strong>
+          </button>
+          <button type="button" className={`nav-item ${tab === 'ready' ? 'is-active' : ''}`} onClick={() => setTab('ready')}>
+            <span>Optimized</span>
+            <strong>{readyCount}</strong>
+          </button>
+          <button type="button" className={`nav-item ${tab === 'error' ? 'is-active' : ''}`} onClick={() => setTab('error')}>
+            <span>Warnings</span>
+            <strong>{errorCount}</strong>
+          </button>
+        </nav>
+
+        <div className="sidebar-section">
+          <span className="section-label">Files</span>
+          <div className="asset-list">
+            {filteredAssets.length ? (
+              filteredAssets.map((asset) => (
+                <button
+                  key={asset.id}
+                  type="button"
+                  className={`list-row ${asset.id === activeAsset?.id ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setActiveId(asset.id)
+                    setDetailOpen(true)
+                  }}
+                >
+                  <div className="list-row-copy">
+                    <span className="list-row-name">{asset.name}</span>
+                    <span className="list-row-meta">{formatBytes(asset.size)}</span>
+                  </div>
+                  <span className={`list-row-state ${asset.status}`}>{asset.status === 'ready' ? 'Ready' : 'Issue'}</span>
+                </button>
+              ))
+            ) : (
+              <div className="sidebar-empty">No files loaded.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="sidebar-footer">
+          <span>v2.4.0 Batch Mode</span>
+          <button type="button" className="ghost-action" onClick={handleClear} disabled={!assets.length}>
+            Clear
+          </button>
+        </div>
+      </aside>
+
+      <main className="main-shell">
+        <header className="main-header">
+          <div className="main-title">
+            <span className="kicker">Lottie Batch Viewer</span>
+            <span className="subtitle">{totalCount} animations loaded</span>
+          </div>
+
+          <div className="header-controls">
+            <label className="sort-control">
+              <span>Sort</span>
+              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)}>
+                <option value="featured">Featured</option>
+                <option value="newest">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="largest">Largest</option>
+                <option value="smallest">Smallest</option>
+                <option value="name">Name</option>
+              </select>
+            </label>
+            <div className="stat-pill">{formatBytes(totalSize)}</div>
+            <div className="stat-pill">{status}</div>
+          </div>
+        </header>
+
+        <section className="gallery-area">
           <div className="card-grid" aria-label="Loaded Lottie assets">
+            <button
+              type="button"
+              className="upload-card"
+              onClick={() => inputRef.current?.click()}
+              onDragEnter={(event) => {
+                event.preventDefault()
+                setDragging(true)
+              }}
+              onDragOver={(event) => {
+                event.preventDefault()
+                setDragging(true)
+              }}
+            >
+              <span className="upload-card-plus">+</span>
+              <strong>{loading ? 'Reading files...' : dragging ? 'Drop JSON files' : 'Click or drop JSON files'}</strong>
+              <span>Supports 50 files at once. Nested folders work too.</span>
+            </button>
+
             {filteredAssets.map((asset) => {
               const active = asset.id === activeAsset?.id
               return (
@@ -744,11 +1009,15 @@ function App() {
                         <strong>Invalid JSON</strong>
                       </div>
                     )}
-                    {active ? <span className="card-chip">Selected</span> : null}
+                    <div className="preview-overlay">
+                      <span>Inspect</span>
+                    </div>
                   </div>
+
                   <div className="asset-meta">
                     <div className="asset-head">
                       <span className="asset-name">{asset.name}</span>
+                      <span className={`asset-dot ${asset.status}`} />
                     </div>
                     <div className="asset-footer">
                       <div className="author-pill">
@@ -756,11 +1025,11 @@ function App() {
                         <span className="author-text">Local import</span>
                       </div>
                       <div className="asset-metric">
-                        <span className={`asset-badge ${asset.status === 'ready' ? 'is-ready' : 'is-error'}`}>
-                          {asset.status === 'ready' ? `${asset.frames}f` : 'Error'}
-                        </span>
-                        <span className="asset-foot">
-                          {asset.status === 'ready' ? formatBytes(asset.size) : asset.error ?? 'Parse failed'}
+                        <span>{formatBytes(asset.size)}</span>
+                        <span>
+                          {asset.status === 'ready'
+                            ? `${formatDuration(asset.duration ?? 0)} @ ${Math.round(asset.frameRate ?? 0)}fps`
+                            : 'Parse failed'}
                         </span>
                       </div>
                     </div>
@@ -769,76 +1038,250 @@ function App() {
               )
             })}
           </div>
-        ) : (
-          <div className="empty-state">
-            <p>No files yet.</p>
-            <p>Use the plus button or drop a folder of JSON files here.</p>
+        </section>
+
+        <footer className="status-bar">
+          <div className="status-group">
+            <span className="status-live">Ready</span>
+            <span>Files: {totalCount}</span>
+            <span>Ready: {readyCount}</span>
+            <span>Warnings: {errorCount}</span>
           </div>
-        )}
+          <div className="status-group">
+            <span>{status}</span>
+          </div>
+        </footer>
       </main>
 
       {detailOpen && detailsAsset ? (
         <div className="detail-overlay" role="presentation" onClick={() => setDetailOpen(false)}>
-          <aside
-            className="detail-panel"
-            aria-label="Selected asset details"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="detail-head">
+          <section className="detail-modal" aria-label="Selected asset details" onClick={(event) => event.stopPropagation()}>
+            <header className="detail-modal-head">
               <div>
-                <p className="detail-kicker">Detail</p>
+                <span className="kicker">Inspecting</span>
                 <h2>{detailsAsset.name}</h2>
-                <p className="detail-meta">
-                  {detailsAsset.status === 'ready'
-                    ? `${detailsAsset.width}x${detailsAsset.height} · ${detailsAsset.frames} frames · ${formatDuration(detailsAsset.duration ?? 0)}`
-                    : detailsAsset.error ?? 'Parse failed'}
-                </p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setDetailOpen(false)}>
+                Close
+              </button>
+            </header>
+
+            <div className="detail-modal-body">
+              <div className="detail-stage-panel">
+                <div className="detail-stage">
+                  <div className="detail-stage-frame">
+                    <DetailPreview asset={detailsAsset} />
+                  </div>
+                </div>
+
+                <div className="playback-bar">
+                  <button type="button" className="play-chip">
+                    Preview
+                  </button>
+                  <div className="timeline-block">
+                    <div className="timeline-meta">
+                      <span>00:00</span>
+                      <span>{formatTimestamp(detailsAsset.duration ?? 0)}</span>
+                    </div>
+                    <div className="timeline-track">
+                      <span style={{ width: exporting ? `${exportProgress}%` : '38%' }} />
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              <div className="detail-actions">
-                <button type="button" className="button" onClick={() => setDetailOpen(false)}>
-                  Close
-                </button>
-                <button type="button" className="button" onClick={() => downloadFile(detailsAsset.file)}>
-                  Download JSON
-                </button>
-                <button
-                  type="button"
-                  className="button button-primary"
-                  onClick={() => exportSelectedMp4(detailsAsset)}
-                  disabled={exporting}
-                >
-                  {exporting ? 'Exporting...' : 'Export MP4'}
-                </button>
-              </div>
-            </div>
+              <aside className="detail-inspector">
+                <div className="detail-tabs">
+                  <button type="button" className="detail-tab is-active">
+                    File Details
+                  </button>
+                  <button type="button" className="detail-tab">
+                    Layers
+                  </button>
+                </div>
 
-            <div className="detail-stage">
-              <DetailPreview asset={detailsAsset} />
-            </div>
+                <div className="detail-section">
+                  <span className="section-label">Core Metadata</span>
+                  <div className="spec-grid">
+                    <div>
+                      <span>Dimensions</span>
+                      <strong>
+                        {detailsAsset.width && detailsAsset.height ? `${detailsAsset.width} × ${detailsAsset.height}` : '-'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Duration</span>
+                      <strong>{formatDuration(detailsAsset.duration ?? 0)}</strong>
+                    </div>
+                    <div>
+                      <span>Total Frames</span>
+                      <strong>{detailsAsset.frames ?? '-'}</strong>
+                    </div>
+                    <div>
+                      <span>Frame Rate</span>
+                      <strong>{detailsAsset.frameRate ? `${Math.round(detailsAsset.frameRate)} fps` : '-'}</strong>
+                    </div>
+                  </div>
+                </div>
 
-            <div className="detail-export">
-              <span>{exportMessage || 'MP4 export is ready for the selected animation.'}</span>
-              {exporting ? <strong>{exportProgress}%</strong> : null}
-            </div>
+                <div className="detail-section">
+                  <span className="section-label">Health Check</span>
+                  <div className="health-list">
+                    <div className="health-row">
+                      <span>Optimization</span>
+                      <strong className={detailsAsset.status === 'ready' ? 'ok' : 'warn'}>
+                        {detailsAsset.status === 'ready' ? 'READY' : 'ISSUE'}
+                      </strong>
+                    </div>
+                    <div className="health-row">
+                      <span>Export</span>
+                      <strong className={exportMessage && exportMessage.includes('failed') ? 'warn' : 'ok'}>
+                        {exporting ? `${exportProgress}%` : exportMessage || 'IDLE'}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
 
-            <div className="detail-info">
-              <div>
-                <span>File</span>
-                <strong>{detailsAsset.file.name}</strong>
-              </div>
-              <div>
-                <span>Size</span>
-                <strong>{formatBytes(detailsAsset.size)}</strong>
-              </div>
-              <div>
-                <span>Status</span>
-                <strong>{detailsAsset.status}</strong>
-              </div>
+                <div className="detail-section">
+                  <span className="section-label">Actions</span>
+                  <div className="detail-actions-stack">
+                    <button type="button" className="secondary-action" onClick={() => downloadFile(detailsAsset.file)}>
+                      Download JSON
+                    </button>
+                    <button
+                      type="button"
+                      className="primary-action modal-action"
+                      onClick={() => exportSelectedMp4(detailsAsset)}
+                      disabled={exporting}
+                    >
+                      {exporting ? 'Exporting...' : 'Export MP4'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="detail-section ai-section">
+                  <span className="section-label">AI Edit</span>
+                  <div className="provider-toggle" role="tablist" aria-label="AI provider">
+                    <button
+                      type="button"
+                      className={aiProvider === 'fal' ? 'is-active' : ''}
+                      onClick={() => setAiProvider('fal')}
+                    >
+                      fal.ai
+                    </button>
+                    <button
+                      type="button"
+                      className={aiProvider === 'wiro' ? 'is-active' : ''}
+                      onClick={() => setAiProvider('wiro')}
+                    >
+                      Wiro
+                    </button>
+                  </div>
+                  <textarea
+                    className="ai-prompt"
+                    value={aiPrompt}
+                    onChange={(event) => setAiPrompt(event.target.value)}
+                    placeholder="Tell AI what to change in this Lottie..."
+                    rows={5}
+                  />
+                  <button
+                    type="button"
+                    className="primary-action modal-action"
+                    onClick={() => runAiEdit(detailsAsset)}
+                    disabled={aiBusy}
+                  >
+                    {aiBusy ? 'Editing...' : aiProvider === 'fal' ? 'Generate Lottie' : 'Edit with Wiro'}
+                  </button>
+                  <p className="privacy-note">
+                    No data is stored by this app. Keys stay in sessionStorage. AI requests are sent only when you run an edit.
+                  </p>
+                  <p className="ai-message">{aiMessage}</p>
+                </div>
+
+                <div className="detail-section">
+                  <span className="section-label">History</span>
+                  <div className="ai-history">
+                    {aiHistory.length ? (
+                      aiHistory.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`history-row ${item.status}`}
+                          onClick={() => {
+                            if (!item.assetName) return
+                            const found = assets.find((asset) => asset.name === item.assetName)
+                            if (found) setActiveId(found.id)
+                          }}
+                        >
+                          <span>{item.assetName ?? item.message}</span>
+                          <small>
+                            {item.provider} · {item.createdAt}
+                          </small>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="history-empty">No AI edits yet.</p>
+                    )}
+                  </div>
+                </div>
+              </aside>
             </div>
-          </aside>
+          </section>
         </div>
       ) : null}
+
+      <div className="ai-dock">
+        {settingsOpen ? (
+          <section className="settings-panel" aria-label="AI API settings">
+            <div className="settings-head">
+              <div>
+                <span className="section-label">AI Keys</span>
+                <strong>Session only</strong>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setSettingsOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            <label className="settings-field">
+              <span>fal.ai API key</span>
+              <input
+                type="password"
+                value={falKey}
+                placeholder="fal key"
+                onChange={(event) => setFalKey(event.target.value)}
+              />
+            </label>
+
+            <label className="settings-field">
+              <span>Wiro API key</span>
+              <input
+                type="password"
+                value={wiroKey}
+                placeholder="wiro key"
+                onChange={(event) => setWiroKey(event.target.value)}
+              />
+            </label>
+
+            <label className="settings-field">
+              <span>Wiro model slug</span>
+              <input
+                type="text"
+                value={wiroModel}
+                placeholder="openai/gpt-5.5"
+                onChange={(event) => setWiroModel(event.target.value)}
+              />
+            </label>
+
+            <p className="privacy-note">
+              Public GitHub Pages app. We do not keep keys or files. Browser session clears when the tab/session ends.
+            </p>
+          </section>
+        ) : null}
+        <button type="button" className="ai-dock-button" onClick={() => setSettingsOpen((current) => !current)}>
+          AI
+        </button>
+      </div>
 
       <div ref={exportCanvasHostRef} className="export-host" aria-hidden="true" />
     </div>

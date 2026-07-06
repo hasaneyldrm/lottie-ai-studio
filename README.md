@@ -1,6 +1,6 @@
 # Bulk Lottie Viewer
 
-Bulk Lottie Viewer is a local review tool for inspecting many Lottie JSON files at once.
+Bulk Lottie Viewer is a browser-based dashboard for inspecting, exporting, and AI-editing many Lottie JSON files at once.
 
 ## What it does
 
@@ -8,19 +8,25 @@ Bulk Lottie Viewer is a local review tool for inspecting many Lottie JSON files 
 - Drop folders and scan nested files
 - Search the loaded list by filename
 - Preview one animation in a larger stage
-- Pause, resume, scrub, and change playback speed
 - Show file size, dimensions, frame count, and duration
+- Export selected animations as MP4
+- Generate or edit Lottie files with fal.ai Omnilottie or a Wiro model runner
+- Keep AI edit history inside the current browser session
 
 ## Why it exists
 
-This was built for batch checks. The goal is to make it easy to load a pile of exports, spot the wrong file fast, and inspect the selected animation without losing the list.
+This was built for batch checks and fast iteration. Load a pile of exports, spot the wrong file fast, inspect the selected animation, then create AI-assisted variants without losing the batch view.
 
-## About
+## Privacy
 
-- Runs locally in the browser
+- Runs in the browser
 - Accepts `.json` Lottie files
 - Skips invalid files and keeps the rest of the batch
 - Uses `lottie-web` for playback
+- Does not include a backend database
+- Does not store uploaded files or API keys on a server
+- fal.ai and Wiro keys are stored only in `sessionStorage`
+- AI requests are sent to the selected provider only when you run an edit
 
 ## Run it
 
@@ -36,3 +42,7 @@ Open `http://localhost:5173`.
 ```bash
 npm run build
 ```
+
+## Deploy
+
+The repository includes a GitHub Pages workflow. Push to `main`, then enable GitHub Pages with **Source: GitHub Actions** in the repository settings.
