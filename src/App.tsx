@@ -342,7 +342,7 @@ function App() {
     >
       <header className="topbar">
         <div>
-          <p className="eyebrow">Lottie viewer</p>
+          <p className="eyebrow">Bulk Lottie Viewer</p>
           <h1>Bulk JSON önizleyici</h1>
           <p className="lede">
             Dosyaları sürükle-bırak, soldaki listeden seç, sağda büyük önizlemeyi kontrol et.
@@ -366,6 +366,21 @@ function App() {
           </button>
         </div>
       </header>
+
+      <section className="about-bar" aria-label="About this app">
+        <div>
+          <p className="panel-label">About</p>
+          <p className="about-copy">
+            Bulk Lottie Viewer is a local review tool for scanning many JSON animations at once,
+            checking dimensions, and previewing the selected file in a larger stage.
+          </p>
+        </div>
+        <div className="about-meta">
+          <span>Batch-friendly</span>
+          <span>Drag and drop</span>
+          <span>Single-file preview</span>
+        </div>
+      </section>
 
       <section
         className={`dropzone ${loading ? 'is-loading' : ''}`}

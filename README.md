@@ -1,32 +1,38 @@
-# React + TypeScript + Vite
+# Bulk Lottie Viewer
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Bulk Lottie Viewer is a local review tool for inspecting many Lottie JSON files at once.
 
-Currently, two official plugins are available:
+## What it does
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Drag and drop multiple JSON files
+- Drop folders and scan nested files
+- Search the loaded list by filename
+- Preview one animation in a larger stage
+- Pause, resume, scrub, and change playback speed
+- Show file size, dimensions, frame count, and duration
 
-## React Compiler
+## Why it exists
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+This was built for batch checks. The goal is to make it easy to load a pile of exports, spot the wrong file fast, and inspect the selected animation without losing the list.
 
-## Expanding the Oxlint configuration
+## About
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+- Runs locally in the browser
+- Accepts `.json` Lottie files
+- Skips invalid files and keeps the rest of the batch
+- Uses `lottie-web` for playback
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+## Run it
+
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Open `http://localhost:5173`.
+
+## Build
+
+```bash
+npm run build
+```
