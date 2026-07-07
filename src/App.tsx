@@ -403,6 +403,8 @@ function App() {
   const [aiBusy, setAiBusy] = useState(false)
   const [aiMessage, setAiMessage] = useState('AI edits create a new Lottie file in this browser session.')
   const [aiHistory, setAiHistory] = useState<AiHistoryItem[]>([])
+  const [historyPanelOpen, setHistoryPanelOpen] = useState(false)
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const ffmpegRef = useRef(new FFmpeg())
   const ffmpegLoadedRef = useRef(false)
@@ -558,6 +560,7 @@ function App() {
   const totalCount = assets.length
   const detailsAsset = activeAsset ?? filteredAssets[0] ?? null
   const totalSize = assets.reduce((sum, asset) => sum + asset.size, 0)
+  const activeHistory = aiHistory.find((item) => item.id === activeHistoryId) ?? aiHistory[0] ?? null
 
   useEffect(() => {
     if (!detailOpen) return
@@ -704,14 +707,15 @@ function App() {
   }
 
   function addAiHistory(item: Omit<AiHistoryItem, 'id' | 'createdAt'>) {
-    setAiHistory((current) => [
-      {
-        ...item,
-        id: crypto.randomUUID(),
-        createdAt: new Date().toLocaleTimeString(),
-      },
-      ...current,
-    ].slice(0, 12))
+    const entry = {
+      ...item,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toLocaleTimeString(),
+    }
+
+    setAiHistory((current) => [entry, ...current].slice(0, 12))
+    setActiveHistoryId(entry.id)
+    setHistoryPanelOpen(true)
   }
 
   function addGeneratedAsset(name: string, data: LottieData, provider: AiProvider, prompt: string) {
@@ -789,7 +793,12 @@ function App() {
     }
 
     const modelPath = wiroModel.trim().split('/').map(encodeURIComponent).join('/')
-    const response = await fetch(`https://api.wiro.ai/v1/Run/${modelPath}`, {
+    const isLocalDev = ['localhost', '127.0.0.1'].includes(window.location.hostname)
+    const endpoint = isLocalDev
+      ? `/api/wiro/v1/Run/${modelPath}`
+      : `https://api.wiro.ai/v1/Run/${modelPath}`
+
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${wiroKey.trim()}`,
@@ -831,7 +840,11 @@ function App() {
       const name = `${sourceName}-${aiProvider}-edit-${Date.now()}.json`
       addGeneratedAsset(name, data, aiProvider, prompt)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const rawMessage = error instanceof Error ? error.message : String(error)
+      const message =
+        aiProvider === 'wiro' && rawMessage === 'Failed to fetch'
+          ? 'Wiro could not be reached from this browser. Local dev now uses a proxy; refresh localhost and try again. On GitHub Pages, Wiro needs CORS support or a proxy URL.'
+          : rawMessage
       setAiMessage(message)
       addAiHistory({
         provider: aiProvider,
@@ -985,6 +998,10 @@ function App() {
           <button type="button" className="sidebar-ai-button" onClick={() => setSettingsOpen((current) => !current)}>
             <span>AI</span>
             <strong>{falKey || wiroKey ? 'Connected' : 'Add keys'}</strong>
+          </button>
+          <button type="button" className="sidebar-history-button" onClick={() => setHistoryPanelOpen(true)}>
+            <span>History</span>
+            <strong>{aiHistory.length}</strong>
           </button>
         </div>
 
@@ -1268,9 +1285,8 @@ function App() {
                           type="button"
                           className={`history-row ${item.status}`}
                           onClick={() => {
-                            if (!item.assetName) return
-                            const found = assets.find((asset) => asset.name === item.assetName)
-                            if (found) setActiveId(found.id)
+                            setActiveHistoryId(item.id)
+                            setHistoryPanelOpen(true)
                           }}
                         >
                           <span>{item.assetName ?? item.message}</span>
@@ -1288,6 +1304,66 @@ function App() {
             </div>
           </section>
         </div>
+      ) : null}
+
+      {historyPanelOpen ? (
+        <aside className="history-drawer" aria-label="AI history">
+          <header className="history-drawer-head">
+            <div>
+              <span className="section-label">AI Activity</span>
+              <strong>{aiHistory.length} runs</strong>
+            </div>
+            <button type="button" className="icon-button compact-button" onClick={() => setHistoryPanelOpen(false)}>
+              Close
+            </button>
+          </header>
+
+          <div className="history-drawer-list">
+            {aiHistory.length ? (
+              aiHistory.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`history-row ${item.status} ${item.id === activeHistory?.id ? 'is-active' : ''}`}
+                  onClick={() => setActiveHistoryId(item.id)}
+                >
+                  <span>{item.assetName ?? item.message}</span>
+                  <small>
+                    {item.provider} · {item.createdAt}
+                  </small>
+                </button>
+              ))
+            ) : (
+              <p className="history-empty">No AI edits yet.</p>
+            )}
+          </div>
+
+          {activeHistory ? (
+            <div className="history-detail">
+              <span className={`history-status ${activeHistory.status}`}>{activeHistory.status}</span>
+              <h3>{activeHistory.assetName ?? 'AI run failed'}</h3>
+              <p>{activeHistory.message}</p>
+              <label>
+                <span>Prompt</span>
+                <textarea value={activeHistory.prompt} readOnly rows={6} />
+              </label>
+              {activeHistory.assetName ? (
+                <button
+                  type="button"
+                  className="primary-action modal-action"
+                  onClick={() => {
+                    const found = assets.find((asset) => asset.name === activeHistory.assetName)
+                    if (!found) return
+                    setActiveId(found.id)
+                    setDetailOpen(true)
+                  }}
+                >
+                  Open generated Lottie
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </aside>
       ) : null}
 
       <div ref={exportCanvasHostRef} className="export-host" aria-hidden="true" />
